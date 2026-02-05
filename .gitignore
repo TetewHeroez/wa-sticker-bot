@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Environment variables (JANGAN upload ini!)
+.env
+
+# Media files (generated at runtime)
+media/input/*
+media/output/*
+public/stickers/*
+
+# Keep directories
+!media/input/.gitkeep
+!media/output/.gitkeep
+!public/stickers/.gitkeep
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
