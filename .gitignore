@@ -25,3 +25,10 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Bot data files (local only)
+stats.json
+processed_ids.json
+
+# Tunnel config files
+ecosystem.config.js
