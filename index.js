@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { convertToSticker, convertVideoToSticker } = require("./convert");
 const templates = require("./templates");
+const { getAIResponse, clearHistory, getConversationStats } = require("./ai");
 
 // Ensure directories exist
 ["media/input", "media/output", "public/stickers"].forEach((dir) => {
@@ -42,6 +43,25 @@ try {
   }
 } catch (e) {
   console.log("[INIT] Could not load stats:", e.message);
+}
+
+function getBotStatsStr() {
+  const currentSessionUptime = Date.now() - stats.lastStartTime;
+  const totalUptimeMs = stats.totalUptime + currentSessionUptime;
+  const totalMinutes = Math.floor(totalUptimeMs / 1000 / 60);
+  const days = Math.floor(totalMinutes / 60 / 24);
+  const hours = Math.floor((totalMinutes / 60) % 24);
+  const minutes = totalMinutes % 60;
+
+  const uptimeStr =
+    days > 0
+      ? `${days} hari ${hours} jam ${minutes} menit`
+      : hours > 0
+        ? `${hours} jam ${minutes} menit`
+        : `${minutes} menit`;
+
+  const aiStats = getConversationStats();
+  return `📊 *Statistik Bot*\n\nSticker dibuat: ${stats.stickers}\nTotal uptime: ${uptimeStr}\nPercakapan AI aktif: ${aiStats.activeConversations}\nTotal pesan AI: ${aiStats.totalMessages}`;
 }
 
 function saveStats() {
@@ -222,38 +242,45 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // TEXT → HELP / STATS
+    // TEXT → AI AGENT / COMMANDS
     if (msg.type === "text") {
       const text = msg.text.body.toLowerCase().trim();
 
       if (text === "stats" || text === "statistik") {
-        // Calculate total uptime (accumulated + current session)
-        const currentSessionUptime = Date.now() - stats.lastStartTime;
-        const totalUptimeMs = stats.totalUptime + currentSessionUptime;
-        const totalMinutes = Math.floor(totalUptimeMs / 1000 / 60);
-        const days = Math.floor(totalMinutes / 60 / 24);
-        const hours = Math.floor((totalMinutes / 60) % 24);
-        const minutes = totalMinutes % 60;
-
-        const uptimeStr =
-          days > 0
-            ? `${days} hari ${hours} jam ${minutes} menit`
-            : hours > 0
-              ? `${hours} jam ${minutes} menit`
-              : `${minutes} menit`;
-
-        await sendText(
-          from,
-          `📊 *Statistik Bot*\n\nSticker dibuat: ${stats.stickers}\nTotal uptime: ${uptimeStr}`,
-        );
+        const statsStr = getBotStatsStr();
+        await sendText(from, statsStr);
         logActivity("STATS", from, {
           stickers: stats.stickers,
-          uptimeMinutes: totalMinutes,
+          uptimeMinutes: Math.floor(
+            (stats.totalUptime + Date.now() - stats.lastStartTime) / 1000 / 60,
+          ),
         });
-      } else {
-        // Show help for any text message
+      } else if (text === "reset" || text === "reset chat") {
+        // Reset conversation history
+        clearHistory(from);
+        await sendText(
+          from,
+          "🔄 Percakapan AI telah direset. Mulai dari awal!",
+        );
+        logActivity("RESET_AI", from);
+      } else if (text === "help" || text === "bantuan" || text === "menu") {
         await sendText(from, templates.HELP_MESSAGE);
         logActivity("HELP", from);
+      } else {
+        // AI Agent responds to all other text messages
+        try {
+          const statsStr = getBotStatsStr();
+          const aiReply = await getAIResponse(from, msg.text.body, statsStr);
+          await sendText(from, aiReply);
+          logActivity("AI_CHAT", from, { messageLength: msg.text.body.length });
+        } catch (err) {
+          console.error("[AI] Failed:", err.message);
+          await sendText(
+            from,
+            "❌ Maaf, AI sedang bermasalah. Coba lagi nanti ya!\n\nKetik *help* untuk melihat fitur lainnya.",
+          );
+          logActivity("AI_ERROR", from, { error: err.message });
+        }
       }
     }
 
