@@ -7,10 +7,67 @@ const { convertToSticker, convertVideoToSticker } = require("./convert");
 const templates = require("./templates");
 const { getAIResponse, clearHistory, getConversationStats } = require("./ai");
 
+// Use p-limit to prevent too many concurrent ffmpeg instances
+const pLimit = require("p-limit").default || require("p-limit");
+const mediaQueue = pLimit(10); // Max 10 conversions at the same time
+const sendQueue = pLimit(1); // Force sequential sending to prevent WhatsApp API rate limit (#131056)
+
+let consecutiveSends = 0;
+let lastSendGapTime = Date.now();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function rateLimitedSendSticker(from, mediaId, additionalSleep = 0) {
+  await sendQueue(async () => {
+    const now = Date.now();
+    // Reset counter if it's been more than 1.5 minutes since last send
+    if (now - lastSendGapTime > 90000) {
+      consecutiveSends = 0;
+    }
+
+    if (consecutiveSends >= 10) {
+      console.log(
+        "[RATE LIMIT] 10 stiker terkirim berturut-turut, jeda 90 detik...",
+      );
+      await sendText(
+        from,
+        "⏳ *Sistem jeda otomatis*...\nSaya istirahat 1.5 menit (90 detik) dulu agar tidak diblokir oleh WhatsApp, sisa stiker akan langsung dikirim setelah ini!",
+      ).catch(() => {});
+      await sleep(90000);
+      consecutiveSends = 0;
+    }
+
+    consecutiveSends++;
+    lastSendGapTime = Date.now();
+
+    await sendSticker(from, mediaId);
+    await sleep(1000 + additionalSleep);
+  });
+}
+
 // Ensure directories exist
 ["media/input", "media/output", "public/stickers"].forEach((dir) => {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
+
+// === CLEANUP ON RESTART ===
+const STARTUP_CLEANUP = true;
+if (STARTUP_CLEANUP) {
+  console.log("[INIT] Clearing old processing cache...");
+  ["media/input", "public/stickers"].forEach((dir) => {
+    try {
+      if (fs.existsSync(dir)) {
+        fs.readdirSync(dir).forEach((file) => {
+          if (file !== ".gitkeep") {
+            // preserve folder structure if needed
+            fs.unlinkSync(path.join(dir, file));
+          }
+        });
+      }
+    } catch (e) {
+      console.error(`[INIT] Hapus cache ${dir} gagal: ${e.message}`);
+    }
+  });
+}
 
 const app = express();
 
@@ -176,174 +233,183 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    const msg = value.messages[0];
-    if (!msg || !msg.id || !msg.from || !msg.type) {
-      console.log("[SKIP] Invalid message structure");
-      return;
-    }
+    for (const msg of value.messages) {
+      if (!msg || !msg.id || !msg.from || !msg.type) {
+        console.log("[SKIP] Invalid message structure");
+        continue;
+      }
 
-    // CRITICAL: Ignore old messages (older than 60 seconds)
-    // WhatsApp sometimes replays old messages on reconnect
-    const msgTimestamp = parseInt(msg.timestamp, 10) * 1000; // Convert to ms
-    const now = Date.now();
-    const ageSeconds = (now - msgTimestamp) / 1000;
+      // Ignore messages from bot itself (echo prevention)
+      const metadata = value.metadata;
+      if (msg.from === metadata?.display_phone_number?.replace(/\D/g, "")) {
+        console.log("[SKIP] Message from bot itself");
+        continue;
+      }
 
-    if (ageSeconds > 60) {
+      // Prevent duplicate processing
+      if (processed.has(msg.id)) {
+        console.log("[SKIP] Already processed:", msg.id);
+        continue;
+      }
+      processed.add(msg.id);
+      saveProcessedIds(); // Persist to disk
+
       console.log(
-        "[SKIP] Old message, age:",
-        Math.floor(ageSeconds),
-        "seconds, ID:",
+        "[PROCESS] Message from:",
+        msg.from,
+        "Type:",
+        msg.type,
+        "ID:",
         msg.id,
       );
-      return;
-    }
 
-    // Ignore messages from bot itself (echo prevention)
-    const metadata = value.metadata;
-    if (msg.from === metadata?.display_phone_number?.replace(/\D/g, "")) {
-      console.log("[SKIP] Message from bot itself");
-      return;
-    }
+      // Cleanup old processed IDs (keep last 1000)
+      if (processed.size > 1000) {
+        const arr = [...processed];
+        arr.slice(0, arr.length - 1000).forEach((id) => processed.delete(id));
+      }
 
-    // Prevent duplicate processing
-    if (processed.has(msg.id)) {
-      console.log("[SKIP] Already processed:", msg.id);
-      return;
-    }
-    processed.add(msg.id);
-    saveProcessedIds(); // Persist to disk
+      const from = msg.from;
+      const isMaintenance = process.env.MAINTENANCE_MODE === "true";
 
-    console.log(
-      "[PROCESS] Message from:",
-      msg.from,
-      "Type:",
-      msg.type,
-      "ID:",
-      msg.id,
-      "Age:",
-      Math.floor(ageSeconds),
-      "sec",
-    );
-
-    // Cleanup old processed IDs (keep last 1000)
-    if (processed.size > 1000) {
-      const arr = [...processed];
-      arr.slice(0, arr.length - 1000).forEach((id) => processed.delete(id));
-    }
-
-    const from = msg.from;
-    const isMaintenance = process.env.MAINTENANCE_MODE === "true";
-
-    if (isMaintenance) {
-      await sendText(
-        from,
-        "🚧 Bot sedang perbaikan.\n\nMohon tunggu ya, fitur akan aktif kembali sebentar lagi ✨",
-      );
-      return;
-    }
-
-    // TEXT → AI AGENT / COMMANDS
-    if (msg.type === "text") {
-      const text = msg.text.body.toLowerCase().trim();
-
-      if (text === "stats" || text === "statistik") {
-        const statsStr = getBotStatsStr();
-        await sendText(from, statsStr);
-        logActivity("STATS", from, {
-          stickers: stats.stickers,
-          uptimeMinutes: Math.floor(
-            (stats.totalUptime + Date.now() - stats.lastStartTime) / 1000 / 60,
-          ),
-        });
-      } else if (text === "reset" || text === "reset chat") {
-        // Reset conversation history
-        clearHistory(from);
+      if (isMaintenance) {
         await sendText(
           from,
-          "🔄 Percakapan AI telah direset. Mulai dari awal!",
+          "🚧 Bot sedang perbaikan.\n\nMohon tunggu ya, fitur akan aktif kembali sebentar lagi ✨",
         );
-        logActivity("RESET_AI", from);
-      } else if (text === "help" || text === "bantuan" || text === "menu") {
-        await sendText(from, templates.HELP_MESSAGE);
-        logActivity("HELP", from);
-      } else {
-        // AI Agent responds to all other text messages
-        try {
+        continue;
+      }
+
+      // TEXT → AI AGENT / COMMANDS
+      if (msg.type === "text") {
+        const text = msg.text.body.toLowerCase().trim();
+
+        if (text === "stats" || text === "statistik") {
           const statsStr = getBotStatsStr();
-          const aiReply = await getAIResponse(from, msg.text.body, statsStr);
-          await sendText(from, aiReply);
-          logActivity("AI_CHAT", from, { messageLength: msg.text.body.length });
-        } catch (err) {
-          console.error("[AI] Failed:", err.message);
+          await sendText(from, statsStr);
+          logActivity("STATS", from, {
+            stickers: stats.stickers,
+            uptimeMinutes: Math.floor(
+              (stats.totalUptime + Date.now() - stats.lastStartTime) /
+                1000 /
+                60,
+            ),
+          });
+        } else if (text === "reset" || text === "reset chat") {
+          // Reset conversation history
+          clearHistory(from);
           await sendText(
             from,
-            "❌ Maaf, AI sedang bermasalah. Coba lagi nanti ya!\n\nKetik *help* untuk melihat fitur lainnya.",
+            "🔄 Percakapan AI telah direset. Mulai dari awal!",
           );
-          logActivity("AI_ERROR", from, { error: err.message });
+          logActivity("RESET_AI", from);
+        } else if (text === "help" || text === "bantuan" || text === "menu") {
+          await sendText(from, templates.HELP_MESSAGE);
+          logActivity("HELP", from);
+        } else {
+          // AI Agent responds to all other text messages
+          try {
+            const statsStr = getBotStatsStr();
+            const aiReply = await getAIResponse(from, msg.text.body, statsStr);
+            await sendText(from, aiReply);
+            logActivity("AI_CHAT", from, {
+              messageLength: msg.text.body.length,
+            });
+          } catch (err) {
+            console.error("[AI] Failed:", err.response?.data || err.message);
+            await sendText(
+              from,
+              "❌ Maaf, AI sedang bermasalah. Coba lagi nanti ya!\n\nKetik *help* untuk melihat fitur lainnya.",
+            );
+            logActivity("AI_ERROR", from, {
+              error: err.response?.data || err.message,
+            });
+          }
         }
       }
-    }
 
-    // IMAGE → STICKER (Static)
-    if (msg.type === "image") {
-      const mediaId = msg.image.id;
-      const inputPath = `media/input/${mediaId}`;
-      const outputPath = `public/stickers/${mediaId}.webp`;
-      const startTime = Date.now();
+      // IMAGE → STICKER (Static)
+      if (msg.type === "image") {
+        mediaQueue(async () => {
+          const mediaId = msg.image.id;
+          const inputPath = `media/input/${mediaId}`;
+          const outputPath = `public/stickers/${mediaId}.webp`;
+          const startTime = Date.now();
 
-      try {
-        await sendText(from, "⏳ _Sedang memproses gambar..._");
-        await downloadMedia(mediaId, inputPath);
-        await convertToSticker(inputPath, outputPath);
-        await sendSticker(from, mediaId);
-        stats.stickers++;
-        saveStats(); // Persist immediately
+          try {
+            await downloadMedia(mediaId, inputPath);
+            await convertToSticker(inputPath, outputPath);
 
-        const processingTime = Date.now() - startTime;
-        logActivity("STICKER_IMAGE", from, {
-          processingTimeMs: processingTime,
-          totalStickers: stats.stickers,
+            // Antre pengiriman stiker agar tidak kena limit Meta #131056
+            await rateLimitedSendSticker(from, mediaId, 0);
+
+            stats.stickers++;
+            saveStats(); // Persist immediately
+
+            const processingTime = Date.now() - startTime;
+            logActivity("STICKER_IMAGE", from, {
+              processingTimeMs: processingTime,
+              totalStickers: stats.stickers,
+            });
+
+            cleanup(inputPath);
+            setTimeout(() => cleanup(outputPath), 60000);
+          } catch (err) {
+            console.error(
+              "Image conversion error (details):",
+              JSON.stringify(err.response?.data || err.message, null, 2),
+            );
+            logActivity("ERROR_IMAGE", from, {
+              error: err.response?.data?.error?.message || err.message,
+            });
+            await sendText(
+              from,
+              "❌ Gagal mengkonversi gambar. Pastikan gambar tidak rusak!",
+            ).catch(() => {});
+          }
         });
-
-        cleanup(inputPath);
-        setTimeout(() => cleanup(outputPath), 60000);
-      } catch (err) {
-        console.error("Image conversion error:", err.message);
-        logActivity("ERROR_IMAGE", from, { error: err.message });
-        await sendText(from, "❌ Gagal mengkonversi gambar. Coba lagi ya!");
       }
-    }
 
-    // VIDEO → ANIMATED STICKER
-    if (msg.type === "video") {
-      const mediaId = msg.video.id;
-      const inputPath = `media/input/${mediaId}.mp4`;
-      const outputPath = `public/stickers/${mediaId}.webp`;
-      const startTime = Date.now();
+      // VIDEO → ANIMATED STICKER
+      if (msg.type === "video") {
+        mediaQueue(async () => {
+          const mediaId = msg.video.id;
+          const inputPath = `media/input/${mediaId}.mp4`;
+          const outputPath = `public/stickers/${mediaId}.webp`;
+          const startTime = Date.now();
 
-      try {
-        await sendText(from, "⏳ _Sedang memproses video..._");
-        await downloadMedia(mediaId, inputPath);
-        await convertVideoToSticker(inputPath, outputPath);
-        await sendSticker(from, mediaId);
-        stats.stickers++;
-        saveStats(); // Persist immediately
+          try {
+            await downloadMedia(mediaId, inputPath);
+            await convertVideoToSticker(inputPath, outputPath);
 
-        const processingTime = Date.now() - startTime;
-        logActivity("STICKER_VIDEO", from, {
-          processingTimeMs: processingTime,
-          totalStickers: stats.stickers,
+            // Antre pengiriman stiker agar tidak kena limit Meta #131056
+            await rateLimitedSendSticker(from, mediaId, 500);
+
+            stats.stickers++;
+            saveStats(); // Persist immediately
+
+            const processingTime = Date.now() - startTime;
+            logActivity("STICKER_VIDEO", from, {
+              processingTimeMs: processingTime,
+              totalStickers: stats.stickers,
+            });
+
+            cleanup(inputPath);
+            setTimeout(() => cleanup(outputPath), 60000);
+          } catch (err) {
+            console.error(
+              "Video conversion error:",
+              err.response?.data || err.message,
+            );
+            logActivity("ERROR_VIDEO", from, {
+              error: err.response?.data || err.message,
+            });
+            await sendText(
+              from,
+              "❌ Gagal mengkonversi video. Pastikan durasi < 6 detik!",
+            ).catch(() => {});
+          }
         });
-
-        cleanup(inputPath);
-        setTimeout(() => cleanup(outputPath), 60000);
-      } catch (err) {
-        console.error("Video conversion error:", err.message);
-        logActivity("ERROR_VIDEO", from, { error: err.message });
-        await sendText(
-          from,
-          "❌ Gagal mengkonversi video. Pastikan durasi < 6 detik!",
-        );
       }
     }
   } catch (err) {
