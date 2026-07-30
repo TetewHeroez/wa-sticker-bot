@@ -103,7 +103,7 @@ async function getAIResponse(userId, message, statsStr = "") {
   ];
 
   try {
-    const model = process.env.AI_MODEL || "google/gemini-2.0-flash-001";
+    const model = process.env.AI_MODEL || "google/gemini-3.5-flash-lite";
 
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
