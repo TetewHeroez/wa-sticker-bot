@@ -411,6 +411,133 @@ app.post("/webhook", async (req, res) => {
           }
         });
       }
+
+      // DOCUMENT (image) → STICKER
+      // Ketika user mengirim gambar sebagai dokumen (bukan lewat galeri/kamera),
+      // WhatsApp mengirimnya sebagai tipe "document" bukan "image".
+      if (msg.type === "document") {
+        const doc = msg.document;
+        const mime = (doc.mime_type || "").toLowerCase();
+        const filename = (doc.filename || "").toLowerCase();
+        const imageMimes = [
+          "image/png",
+          "image/jpeg",
+          "image/jpg",
+          "image/webp",
+          "image/bmp",
+          "image/tiff",
+        ];
+        const imageExtensions = [
+          ".png",
+          ".jpg",
+          ".jpeg",
+          ".webp",
+          ".bmp",
+          ".tiff",
+        ];
+        const isImageDoc =
+          imageMimes.includes(mime) ||
+          imageExtensions.some((ext) => filename.endsWith(ext));
+
+        const videoMimes = ["video/mp4", "video/3gpp", "video/quicktime"];
+        const videoExtensions = [".mp4", ".3gp", ".mov"];
+        const isVideoDoc =
+          videoMimes.includes(mime) ||
+          videoExtensions.some((ext) => filename.endsWith(ext));
+
+        if (isImageDoc) {
+          mediaQueue(async () => {
+            const mediaId = doc.id;
+            const ext = mime.includes("png")
+              ? ".png"
+              : mime.includes("webp")
+                ? ".webp"
+                : ".jpg";
+            const inputPath = `media/input/${mediaId}${ext}`;
+            const outputPath = `public/stickers/${mediaId}.webp`;
+            const startTime = Date.now();
+
+            try {
+              await downloadMedia(mediaId, inputPath);
+              await convertToSticker(inputPath, outputPath);
+
+              await rateLimitedSendSticker(from, mediaId, 0);
+
+              stats.stickers++;
+              saveStats();
+
+              const processingTime = Date.now() - startTime;
+              logActivity("STICKER_DOCUMENT_IMAGE", from, {
+                processingTimeMs: processingTime,
+                totalStickers: stats.stickers,
+                mimeType: mime,
+                filename: doc.filename,
+              });
+
+              cleanup(inputPath);
+              setTimeout(() => cleanup(outputPath), 60000);
+            } catch (err) {
+              console.error(
+                "Document image conversion error:",
+                JSON.stringify(err.response?.data || err.message, null, 2),
+              );
+              logActivity("ERROR_DOCUMENT_IMAGE", from, {
+                error: err.response?.data?.error?.message || err.message,
+                mimeType: mime,
+              });
+              await sendText(
+                from,
+                "❌ Gagal mengkonversi dokumen gambar ke stiker. Pastikan file tidak rusak!",
+              ).catch(() => {});
+            }
+          });
+        } else if (isVideoDoc) {
+          mediaQueue(async () => {
+            const mediaId = doc.id;
+            const inputPath = `media/input/${mediaId}.mp4`;
+            const outputPath = `public/stickers/${mediaId}.webp`;
+            const startTime = Date.now();
+
+            try {
+              await downloadMedia(mediaId, inputPath);
+              await convertVideoToSticker(inputPath, outputPath);
+
+              await rateLimitedSendSticker(from, mediaId, 500);
+
+              stats.stickers++;
+              saveStats();
+
+              const processingTime = Date.now() - startTime;
+              logActivity("STICKER_DOCUMENT_VIDEO", from, {
+                processingTimeMs: processingTime,
+                totalStickers: stats.stickers,
+                mimeType: mime,
+                filename: doc.filename,
+              });
+
+              cleanup(inputPath);
+              setTimeout(() => cleanup(outputPath), 60000);
+            } catch (err) {
+              console.error(
+                "Document video conversion error:",
+                err.response?.data || err.message,
+              );
+              logActivity("ERROR_DOCUMENT_VIDEO", from, {
+                error: err.response?.data || err.message,
+                mimeType: mime,
+              });
+              await sendText(
+                from,
+                "❌ Gagal mengkonversi dokumen video. Pastikan durasi < 6 detik!",
+              ).catch(() => {});
+            }
+          });
+        } else {
+          console.log(
+            `[SKIP] Document bukan gambar/video: mime=${mime}, filename=${doc.filename}`,
+          );
+        }
+      }
     }
   } catch (err) {
     console.error("Webhook error:", err.response?.data || err.message);
