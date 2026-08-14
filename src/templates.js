@@ -3,13 +3,17 @@ module.exports = {
     name: "sticker_intro_v1",
     language: "id",
   },
-  HELP_MESSAGE: `*Konnichiwa, Sensei...*
+  HELP_MESSAGE: `*Konnichiwa, Sensei...* 😊👋
 
 _Cara Pakai:_
 📸 Kirim *gambar* → Sticker statis
 🎥 Kirim *video* (maks 6 detik) → Sticker animasi
 📎 Kirim *dokumen gambar/video* (PNG, JPG, MP4, dll) → Juga dikonversi ke sticker!
 💬 Kirim *pesan teks* → Dijawab oleh AI
+
+_Brat Sticker:_
+🟢 Ketik *.brat [teks]* → Brat sticker statis
+🟢 Ketik *.bratgif [teks]* → Brat sticker animasi (per kata)
 
 _Perintah:_
 - Ketik *stats* untuk melihat statistik bot

@@ -7,12 +7,13 @@ node_modules/
 # Media files (generated at runtime)
 media/input/*
 media/output/*
-public/stickers/*
 
 # Keep directories
 !media/input/.gitkeep
 !media/output/.gitkeep
-!public/stickers/.gitkeep
+
+# Runtime data
+data/
 
 # OS files
 .DS_Store
@@ -25,10 +26,6 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
-
-# Bot data files (local only)
-stats.json
-processed_ids.json
 
 # Tunnel config files
 ecosystem.config.js

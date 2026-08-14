@@ -8,7 +8,7 @@ function convertToSticker(input, output) {
     ffmpeg(input)
       .outputOptions([
         "-vcodec libwebp",
-        "-vf scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+        "-vf scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
         "-lossless 0",
         "-compression_level 4",
         "-q:v 60",
@@ -30,7 +30,7 @@ function convertVideoToSticker(input, output) {
       .inputOptions(["-t 6"]) // Limit to 6 seconds
       .outputOptions([
         "-vcodec libwebp",
-        "-vf fps=15,scale=512:512:force_original_aspect_ratio=decrease,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
+        "-vf fps=15,scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000",
         "-lossless 0",
         "-compression_level 4",
         "-q:v 60",
