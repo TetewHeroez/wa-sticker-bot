@@ -247,6 +247,7 @@ async function handleWebhook(body) {
 
       // VIDEO → ANIMATED STICKER
       if (msg.type === "video") {
+        console.log(`[VIDEO] Received video from ${from}, mediaId: ${msg.video.id}`);
         mediaQueue(async () => {
           const mediaId = msg.video.id;
           const inputPath = `media/input/${mediaId}.mp4`;
@@ -254,11 +255,15 @@ async function handleWebhook(body) {
           const startTime = Date.now();
 
           try {
+            console.log(`[VIDEO] Downloading media ${mediaId}...`);
             await downloadMedia(mediaId, inputPath);
+            console.log(`[VIDEO] Converting to animated sticker...`);
             await convertVideoToSticker(inputPath, outputPath);
+            console.log(`[VIDEO] Sending sticker...`);
 
             // Antre pengiriman stiker agar tidak kena limit Meta #131056
             await rateLimitedSendSticker(from, mediaId, 500);
+            console.log(`[VIDEO] Sticker sent successfully!`);
 
             stats.stickers++;
             saveStats(); // Persist immediately
@@ -273,27 +278,32 @@ async function handleWebhook(body) {
             setTimeout(() => cleanup(outputPath), 60000);
           } catch (err) {
             console.error(
-              "Video conversion error:",
-              err.response?.data || err.message,
+              "[VIDEO] Conversion/send error:",
+              JSON.stringify(err.response?.data || err.message, null, 2),
             );
             logActivity("ERROR_VIDEO", from, {
               error: err.response?.data || err.message,
             });
             await sendText(
               from,
-              "❌ Gagal mengkonversi video. Pastikan durasi < 6 detik!",
+              "❌ Gagal mengkonversi video. Pastikan durasi < 6 detik dan ukuran tidak terlalu besar!",
             ).catch(() => {});
           }
         });
       }
 
-      // DOCUMENT (image) → STICKER
+      // DOCUMENT (image/video/gif) → STICKER
       // Ketika user mengirim gambar sebagai dokumen (bukan lewat galeri/kamera),
       // WhatsApp mengirimnya sebagai tipe "document" bukan "image".
       if (msg.type === "document") {
         const doc = msg.document;
         const mime = (doc.mime_type || "").toLowerCase();
         const filename = (doc.filename || "").toLowerCase();
+
+        // GIF → Animated Sticker (harus dicek duluan sebelum image)
+        const isGifDoc =
+          mime === "image/gif" || filename.endsWith(".gif");
+
         const imageMimes = [
           "image/png",
           "image/jpeg",
@@ -320,7 +330,49 @@ async function handleWebhook(body) {
           videoMimes.includes(mime) ||
           videoExtensions.some((ext) => filename.endsWith(ext));
 
-        if (isImageDoc) {
+        if (isGifDoc) {
+          // GIF diperlakukan sebagai animasi → convertVideoToSticker
+          mediaQueue(async () => {
+            const mediaId = doc.id;
+            const inputPath = `media/input/${mediaId}.gif`;
+            const outputPath = `media/output/${mediaId}.webp`;
+            const startTime = Date.now();
+
+            try {
+              await downloadMedia(mediaId, inputPath);
+              await convertVideoToSticker(inputPath, outputPath);
+
+              await rateLimitedSendSticker(from, mediaId, 500);
+
+              stats.stickers++;
+              saveStats();
+
+              const processingTime = Date.now() - startTime;
+              logActivity("STICKER_DOCUMENT_GIF", from, {
+                processingTimeMs: processingTime,
+                totalStickers: stats.stickers,
+                mimeType: mime,
+                filename: doc.filename,
+              });
+
+              cleanup(inputPath);
+              setTimeout(() => cleanup(outputPath), 60000);
+            } catch (err) {
+              console.error(
+                "Document GIF conversion error:",
+                JSON.stringify(err.response?.data || err.message, null, 2),
+              );
+              logActivity("ERROR_DOCUMENT_GIF", from, {
+                error: err.response?.data?.error?.message || err.message,
+                mimeType: mime,
+              });
+              await sendText(
+                from,
+                "❌ Gagal mengkonversi GIF ke stiker animasi. Pastikan ukuran GIF tidak terlalu besar!",
+              ).catch(() => {});
+            }
+          });
+        } else if (isImageDoc) {
           mediaQueue(async () => {
             const mediaId = doc.id;
             const ext = mime.includes("png")
@@ -409,7 +461,7 @@ async function handleWebhook(body) {
           });
         } else {
           console.log(
-            `[SKIP] Document bukan gambar/video: mime=${mime}, filename=${doc.filename}`,
+            `[SKIP] Document bukan gambar/video/gif: mime=${mime}, filename=${doc.filename}`,
           );
         }
       }

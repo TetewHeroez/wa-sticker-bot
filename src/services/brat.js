@@ -144,32 +144,155 @@ async function generateBratSticker(text, outputPath) {
 }
 
 /**
- * Generate animated brat sticker (word-by-word reveal)
+ * Calculate the position of every word in the full text layout.
+ * Returns an array of { word, x, y } objects where x/y are in
+ * the SCALED coordinate system (before 0.7x horizontal scale).
+ */
+function computeWordLayout(fullText, fontSize) {
+  const tempCanvas = createCanvas(1, 1);
+  const ctx = tempCanvas.getContext("2d");
+  ctx.font = `${fontSize}px Arial`;
+
+  const maxWidth = CANVAS_SIZE - PADDING * 2;
+  const effectiveMaxWidth = maxWidth / 0.7;
+  const lines = wrapText(ctx, fullText, effectiveMaxWidth);
+  const lineHeight = fontSize * 1.2;
+  const totalHeight = lines.length * lineHeight;
+  const startY = (CANVAS_SIZE - totalHeight) / 2 + lineHeight / 2;
+
+  // Now figure out which original words map to which position.
+  // We need to split the original text into words (by space) to match
+  // the user's "per word" expectation.
+  const originalWords = fullText.split(/\s+/);
+  const wordPositions = []; // { word, x, y }
+
+  // Walk through lines, measuring each original word's position
+  let wordIdx = 0;
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const lineY = startY + lineIdx * lineHeight;
+    const lineText = lines[lineIdx];
+
+    // Figure out which original words are on this line
+    let xCursor = PADDING / 0.7; // start x in scaled coords
+    let remaining = lineText;
+
+    while (remaining.length > 0 && wordIdx < originalWords.length) {
+      const origWord = originalWords[wordIdx];
+
+      // Check if the line starts with (or contains) this original word
+      // Handle hyphen-split words: the wrapText function splits "antek-antek"
+      // into "antek-" and "antek", but the original word is "antek-antek".
+      // We need to match chunks of the line to original words.
+
+      if (remaining.startsWith(origWord)) {
+        const wordWidth = ctx.measureText(origWord).width;
+        wordPositions.push({ word: origWord, x: xCursor, y: lineY });
+        remaining = remaining.slice(origWord.length).replace(/^\s+/, "");
+        xCursor += wordWidth + ctx.measureText(" ").width;
+        wordIdx++;
+      } else {
+        // The line text doesn't directly match original words (due to hyphen splitting).
+        // In this case, just render the entire remaining line content as one "word entry"
+        // mapped to the current original word.
+        wordPositions.push({ word: origWord, x: xCursor, y: lineY });
+        const wordWidth = ctx.measureText(origWord).width;
+        // Try to consume from remaining
+        // Find how much of remaining corresponds to this original word
+        let consumed = "";
+        // Try matching: the original word might span a hyphen break
+        if (remaining.indexOf(origWord) === 0) {
+          consumed = origWord;
+        } else {
+          // Just consume what we can and move on
+          consumed = remaining.split(/\s+/)[0] || remaining;
+        }
+        remaining = remaining.slice(consumed.length).replace(/^\s+/, "");
+        xCursor += ctx.measureText(consumed).width + ctx.measureText(" ").width;
+        wordIdx++;
+      }
+    }
+  }
+
+  // If we missed any words (shouldn't happen), add them
+  while (wordIdx < originalWords.length) {
+    wordPositions.push({
+      word: originalWords[wordIdx],
+      x: PADDING / 0.7,
+      y: startY,
+    });
+    wordIdx++;
+  }
+
+  return { wordPositions, lineHeight, startY, lines };
+}
+
+/**
+ * Draw a brat-style frame with specific words visible.
+ * @param {Array} wordPositions - All word positions from computeWordLayout
+ * @param {number} visibleCount - How many words (from the start) are visible
+ * @param {number} fontSize - Font size
+ * @returns {object} Canvas object
+ */
+function drawBratGifFrame(wordPositions, visibleCount, fontSize) {
+  const canvas = createCanvas(CANVAS_SIZE, CANVAS_SIZE);
+  const ctx = canvas.getContext("2d");
+
+  // Background
+  ctx.fillStyle = BG_COLOR;
+  ctx.fillRect(0, 0, CANVAS_SIZE, CANVAS_SIZE);
+
+  // Apply low-res blur effect
+  ctx.filter = "blur(1.5px)";
+  ctx.font = `${fontSize}px Arial`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+
+  // Scale text horizontally
+  ctx.save();
+  ctx.scale(0.7, 1);
+
+  for (let i = 0; i < wordPositions.length; i++) {
+    if (i < visibleCount) {
+      ctx.fillStyle = TEXT_COLOR; // Visible
+    } else {
+      ctx.fillStyle = "rgba(0,0,0,0)"; // Invisible (transparent)
+    }
+    ctx.fillText(wordPositions[i].word, wordPositions[i].x, wordPositions[i].y);
+  }
+
+  ctx.restore();
+  return canvas;
+}
+
+/**
+ * Generate animated brat sticker (word-by-word reveal, fixed positions)
  * @param {string} text - Text for the sticker
  * @param {string} outputPath - Path to save the animated WebP file
  */
 async function generateBratGif(text, outputPath) {
-  const words = text.split(/\s+/);
+  const originalWords = text.split(/\s+/);
   const maxWidth = CANVAS_SIZE - PADDING * 2;
   const maxHeight = CANVAS_SIZE - PADDING * 2;
 
-  // Calculate font size based on FULL text so layout doesn't jump between frames
+  // Calculate font size based on FULL text
   const fontSize = getOptimalFontSize(text, maxWidth, maxHeight);
 
-  const tempDir = "media/input"; // Temp frames here (not served via HTTP)
+  // Pre-compute ALL word positions from the full text layout
+  const { wordPositions } = computeWordLayout(text, fontSize);
+
+  const tempDir = "media/input";
   const tempPrefix = `brat_${Date.now()}`;
   const framePaths = [];
 
-  // Frame 0: just background (no text)
-  const bgCanvas = drawBratCanvas("", fontSize);
+  // Frame 0: just background (no words visible)
+  const bgCanvas = drawBratGifFrame(wordPositions, 0, fontSize);
   const bgPath = path.join(tempDir, `${tempPrefix}_000.png`);
   fs.writeFileSync(bgPath, await bgCanvas.encode("png"));
   framePaths.push(bgPath);
 
-  // Frame 1..N: accumulate words one by one
-  for (let i = 0; i < words.length; i++) {
-    const partialText = words.slice(0, i + 1).join(" ");
-    const canvas = drawBratCanvas(partialText, fontSize);
+  // Frame 1..N: reveal one more original word each frame
+  for (let i = 0; i < originalWords.length; i++) {
+    const canvas = drawBratGifFrame(wordPositions, i + 1, fontSize);
     const framePath = path.join(
       tempDir,
       `${tempPrefix}_${String(i + 1).padStart(3, "0")}.png`,
@@ -182,14 +305,17 @@ async function generateBratGif(text, outputPath) {
   const concatFile = path.join(tempDir, `${tempPrefix}_concat.txt`);
   let concatContent = "";
   for (let i = 0; i < framePaths.length; i++) {
-    const isLast = i === framePaths.length - 1;
     const isBg = i === 0;
-    const duration = isLast ? 1.5 : isBg ? 0.3 : 0.5;
+    const duration = isBg ? 0.3 : 0.5; // All word frames equal
     concatContent += `file '${path.resolve(framePaths[i]).replace(/\\/g, "/")}'\n`;
     concatContent += `duration ${duration}\n`;
   }
+  // Hold on full text for 1.25s before looping
+  const lastFrame = path.resolve(framePaths[framePaths.length - 1]).replace(/\\/g, "/");
+  concatContent += `file '${lastFrame}'\n`;
+  concatContent += `duration 1.25\n`;
   // Concat demuxer requires last file repeated without duration
-  concatContent += `file '${path.resolve(framePaths[framePaths.length - 1]).replace(/\\/g, "/")}'\n`;
+  concatContent += `file '${lastFrame}'\n`;
   fs.writeFileSync(concatFile, concatContent);
 
   // Combine frames into animated WebP
@@ -209,7 +335,6 @@ async function generateBratGif(text, outputPath) {
       ])
       .save(outputPath)
       .on("end", () => {
-        // Cleanup temp frames
         cleanupTempFiles(framePaths, concatFile);
         resolve(outputPath);
       })
