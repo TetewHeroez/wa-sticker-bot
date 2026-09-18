@@ -1,6 +1,8 @@
 const ffmpeg = require("fluent-ffmpeg");
 const fs = require("fs");
 
+const MAX_VIDEO_DURATION_SECONDS = 20;
+
 /**
  * Convert image to static WebP sticker (512x512)
  */
@@ -23,13 +25,13 @@ function convertToSticker(input, output) {
 }
 
 /**
- * Convert video to animated WebP sticker (max 6 seconds, 512x512)
+ * Convert video to animated WebP sticker (max 20 seconds, 512x512)
  * WhatsApp animated sticker limit: 500KB
  */
 function convertVideoToSticker(input, output, quality = 30) {
   return new Promise((resolve, reject) => {
     ffmpeg(input)
-      .inputOptions(["-t 6"]) // Limit to 6 seconds
+      .inputOptions([`-t ${MAX_VIDEO_DURATION_SECONDS}`])
       .outputOptions([
         "-vcodec libwebp",
         `-vf fps=10,scale=512:512:force_original_aspect_ratio=decrease,format=rgba,pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000`,
@@ -70,4 +72,8 @@ function convertVideoToSticker(input, output, quality = 30) {
   });
 }
 
-module.exports = { convertToSticker, convertVideoToSticker };
+module.exports = {
+  convertToSticker,
+  convertVideoToSticker,
+  MAX_VIDEO_DURATION_SECONDS,
+};

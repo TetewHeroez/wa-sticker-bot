@@ -2,6 +2,7 @@ const fs = require("fs");
 const {
   convertToSticker,
   convertVideoToSticker,
+  MAX_VIDEO_DURATION_SECONDS,
 } = require("../services/converter");
 const { sendText, downloadMedia } = require("../services/whatsapp");
 const { getAIResponse, clearHistory } = require("../services/ai");
@@ -286,7 +287,7 @@ async function handleWebhook(body) {
             });
             await sendText(
               from,
-              "❌ Gagal mengkonversi video. Pastikan durasi < 6 detik dan ukuran tidak terlalu besar!",
+              `❌ Gagal mengkonversi video. Pastikan durasi maksimal ${MAX_VIDEO_DURATION_SECONDS} detik dan ukuran tidak terlalu besar!`,
             ).catch(() => {});
           }
         });
@@ -455,7 +456,7 @@ async function handleWebhook(body) {
               });
               await sendText(
                 from,
-                "❌ Gagal mengkonversi dokumen video. Pastikan durasi < 6 detik!",
+                `❌ Gagal mengkonversi dokumen video. Pastikan durasi maksimal ${MAX_VIDEO_DURATION_SECONDS} detik!`,
               ).catch(() => {});
             }
           });

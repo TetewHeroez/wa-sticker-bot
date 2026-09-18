@@ -7,7 +7,7 @@ module.exports = {
 
 _Cara Pakai:_
 📸 Kirim *gambar* → Sticker statis
-🎥 Kirim *video* (maks 6 detik) → Sticker animasi
+🎥 Kirim *video* (maks 20 detik) → Sticker animasi
 📎 Kirim *dokumen gambar/video* (PNG, JPG, MP4, dll) → Juga dikonversi ke sticker!
 💬 Kirim *pesan teks* → Dijawab oleh AI
 
@@ -23,7 +23,7 @@ _Perintah:_
 _Tips:_
 - Kirim gambar lewat galeri *atau* sebagai dokumen/file, keduanya bisa!
 - Gunakan gambar/video dengan rasio kotak (1:1) untuk hasil terbaik
-- Video akan dipotong otomatis jika lebih dari 6 detik
+- Video akan dipotong otomatis jika lebih dari 20 detik
 - Ukuran file maksimal 16 MB
 - AI mengingat konteks percakapan selama 30 menit`,
 };

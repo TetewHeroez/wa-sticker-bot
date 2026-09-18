@@ -5,7 +5,7 @@ Bot WhatsApp canggih yang dirancang dengan arsitektur modular untuk mengkonversi
 ## Fitur Utama
 
 - 📸 **Sticker Statis**: Kirim gambar (atau dokumen gambar) otomatis jadi sticker.
-- 🎥 **Sticker Animasi**: Kirim video/GIF (maks 6 detik, atau dokumen video) otomatis jadi sticker animasi.
+- 🎥 **Sticker Animasi**: Kirim video/GIF (maks 20 detik, atau dokumen video) otomatis jadi sticker animasi.
 - 🟢 **Brat Sticker**: Ketik `.brat [teks]` untuk stiker bergaya album *Brat* statis, atau `.bratgif [teks]` untuk versi animasi kata per kata!
 - 💬 **AI Agent**: Ngobrol bebas dengan AI yang pintar! Cukup kirim pesan teks. AI juga bisa mengingat percakapan.
 - 📊 **Statistik**: Ketik `stats` untuk melihat penggunaan bot dan uptime.
