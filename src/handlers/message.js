@@ -287,7 +287,7 @@ async function handleWebhook(body) {
             });
             await sendText(
               from,
-              `❌ Gagal mengkonversi video. Pastikan durasi maksimal ${MAX_VIDEO_DURATION_SECONDS} detik dan ukuran tidak terlalu besar!`,
+              `❌ Gagal mengkonversi video. Durasi boleh maksimal ${MAX_VIDEO_DURATION_SECONDS} detik, tapi output stiker animasi WhatsApp tetap harus di bawah 500KB. Coba video yang gerakannya lebih sedikit atau durasinya lebih pendek.`,
             ).catch(() => {});
           }
         });
@@ -456,7 +456,7 @@ async function handleWebhook(body) {
               });
               await sendText(
                 from,
-                `❌ Gagal mengkonversi dokumen video. Pastikan durasi maksimal ${MAX_VIDEO_DURATION_SECONDS} detik!`,
+                `❌ Gagal mengkonversi dokumen video. Durasi boleh maksimal ${MAX_VIDEO_DURATION_SECONDS} detik, tapi output stiker animasi WhatsApp tetap harus di bawah 500KB.`,
               ).catch(() => {});
             }
           });
