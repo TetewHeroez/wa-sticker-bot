@@ -5,7 +5,14 @@ const MAX_VIDEO_DURATION_SECONDS = 20;
 const MAX_ANIMATED_STICKER_SIZE_BYTES = 500 * 1024;
 const FALLBACK_VIDEO_FPS = 15;
 const MAX_PRESERVED_VIDEO_FPS = 30;
-const MAX_CONVERSION_ATTEMPTS = 28;
+const MAX_BALANCED_CONVERSION_ATTEMPTS = 24;
+const FINAL_COMPRESSION_PRESETS = [
+  { quality: 12, fps: 6 },
+  { quality: 8, fps: 5 },
+  { quality: 5, fps: 5 },
+  { quality: 4, fps: 4 },
+  { quality: 3, fps: 3 },
+];
 
 /**
  * Convert image to static WebP sticker (512x512)
@@ -98,13 +105,23 @@ function buildFpsSteps(sourceFps) {
 }
 
 function buildAnimatedStickerPlan(videoInfo) {
-  const plan = [
+  const plan = [];
+  const addPreset = (preset) => {
+    const isDuplicate = plan.some(
+      (item) => item.quality === preset.quality && item.fps === preset.fps,
+    );
+    if (!isDuplicate) {
+      plan.push(preset);
+    }
+  };
+
+  [
     { quality: 75, fps: null },
     { quality: 65, fps: null },
     { quality: 55, fps: null },
     { quality: 45, fps: null },
     { quality: 35, fps: null },
-  ];
+  ].forEach(addPreset);
 
   const fpsSteps = buildFpsSteps(videoInfo.fps);
 
@@ -113,13 +130,15 @@ function buildAnimatedStickerPlan(videoInfo) {
       index < 4 ? [55, 35] : index < 8 ? [50, 30, 15] : [40, 25, 12, 5, 3];
 
     for (const quality of qualitySteps) {
-      plan.push({ quality, fps });
-      if (plan.length >= MAX_CONVERSION_ATTEMPTS) {
+      addPreset({ quality, fps });
+      if (plan.length >= MAX_BALANCED_CONVERSION_ATTEMPTS) {
+        FINAL_COMPRESSION_PRESETS.forEach(addPreset);
         return plan;
       }
     }
   }
 
+  FINAL_COMPRESSION_PRESETS.forEach(addPreset);
   return plan;
 }
 
