@@ -1,3 +1,3 @@
 @echo off
-cd /d "C:\Users\Lenovo\Documents\Teosofi Agung\wa-sticker-bot"
-pm2 start ecosystem.config.js
+cd /d "D:\Tetew Heroez\wa-sticker-bot"
+pm2 resurrect
