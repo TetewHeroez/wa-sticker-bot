@@ -13,6 +13,21 @@ const { hasProcessed, markProcessed } = require("../utils/processed");
 const { generateBratSticker, generateBratGif } = require("../services/brat");
 const templates = require("../templates");
 
+const MAX_INCOMING_MESSAGE_AGE_SECONDS = Number.parseInt(
+  process.env.MAX_INCOMING_MESSAGE_AGE_SECONDS || "600",
+  10,
+);
+
+function isStaleMessage(message) {
+  const timestamp = Number(message.timestamp);
+  if (!Number.isFinite(timestamp)) {
+    return false;
+  }
+
+  const ageSeconds = Date.now() / 1000 - timestamp;
+  return ageSeconds > MAX_INCOMING_MESSAGE_AGE_SECONDS;
+}
+
 /**
  * Clean up temporary files
  */
@@ -68,6 +83,14 @@ async function handleWebhook(body) {
       const metadata = value.metadata;
       if (msg.from === metadata?.display_phone_number?.replace(/\D/g, "")) {
         console.log("[SKIP] Message from bot itself");
+        continue;
+      }
+
+      if (isStaleMessage(msg)) {
+        const ageSeconds = Math.floor(Date.now() / 1000 - Number(msg.timestamp));
+        console.log(
+          `[SKIP] Stale message: ${msg.id} (${ageSeconds}s old, limit=${MAX_INCOMING_MESSAGE_AGE_SECONDS}s)`,
+        );
         continue;
       }
 
@@ -226,6 +249,10 @@ async function handleWebhook(body) {
             logActivity("STICKER_IMAGE", from, {
               processingTimeMs: processingTime,
               totalStickers: stats.stickers,
+              messageId: msg.id,
+              mediaId,
+              messageTimestamp: msg.timestamp,
+              mediaSha256: msg.image.sha256,
             });
 
             cleanup(inputPath);
