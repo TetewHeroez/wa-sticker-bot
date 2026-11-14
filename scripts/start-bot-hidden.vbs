@@ -3,8 +3,9 @@ Option Explicit
 Dim shell, appDir, nodePath, appPath, command
 
 Set shell = CreateObject("WScript.Shell")
-appDir = "D:\Tetew Heroez\wa-sticker-bot"
-nodePath = "C:\Program Files\nodejs\node.exe"
+appDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)
+appDir = CreateObject("Scripting.FileSystemObject").GetParentFolderName(appDir)
+nodePath = "node.exe"
 appPath = appDir & "\index.js"
 
 shell.CurrentDirectory = appDir

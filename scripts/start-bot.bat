@@ -1,3 +1,3 @@
 @echo off
-cd /d "D:\Tetew Heroez\wa-sticker-bot"
-wscript.exe //B //Nologo "D:\Tetew Heroez\wa-sticker-bot\scripts\start-bot-hidden.vbs"
+cd /d "%~dp0.."
+wscript.exe //B //Nologo "%~dp0start-bot-hidden.vbs"
