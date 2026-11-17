@@ -61,6 +61,16 @@ Project ini sudah di-refactor ke arsitektur modular untuk kemudahan pengembangan
    .\scripts\start-bot.bat
    ```
 
+### Auto-start di Linux
+
+Pada VM ini bot dijalankan otomatis melalui `cron @reboot`, sehingga mulai
+setelah VM menyala tanpa perlu login. Cek proses dan log:
+
+```bash
+pgrep -af "node index.js"
+tail -f data/bot.log
+```
+
 ## Script Lainnya
 
 - Cek status API AI: `npm run check:ai`

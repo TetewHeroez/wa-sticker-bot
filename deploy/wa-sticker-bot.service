@@ -1,0 +1,17 @@
+[Unit]
+Description=WhatsApp Sticker Bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/aslab/projects/wa-sticker-bot
+EnvironmentFile=/home/aslab/projects/wa-sticker-bot/.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
