@@ -46,9 +46,7 @@ function cleanup(filePath) {
  */
 async function handleWebhook(body) {
   try {
-    // Log raw webhook untuk debug
-    console.log("[WEBHOOK]", JSON.stringify(body, null, 2));
-
+    // Log raw webhook untuk debug (compact — only type/id/from)
     const entry = body.entry?.[0];
     if (!entry) return;
 
@@ -64,14 +62,15 @@ async function handleWebhook(body) {
       !Array.isArray(value.messages) ||
       value.messages.length === 0
     ) {
-      console.log("[SKIP] No messages array or empty");
       return;
     }
 
     if (value.statuses) {
-      console.log("[SKIP] Status update, not a message");
       return;
     }
+
+    // Collect all media processing promises so we can track them
+    const processingPromises = [];
 
     for (const msg of value.messages) {
       if (!msg || !msg.id || !msg.from || !msg.type) {
@@ -82,7 +81,6 @@ async function handleWebhook(body) {
       // Ignore messages from bot itself (echo prevention)
       const metadata = value.metadata;
       if (msg.from === metadata?.display_phone_number?.replace(/\D/g, "")) {
-        console.log("[SKIP] Message from bot itself");
         continue;
       }
 
@@ -102,12 +100,7 @@ async function handleWebhook(body) {
       markProcessed(msg.id);
 
       console.log(
-        "[PROCESS] Message from:",
-        msg.from,
-        "Type:",
-        msg.type,
-        "ID:",
-        msg.id,
+        `[PROCESS] from=${msg.from} type=${msg.type} id=${msg.id}`,
       );
 
       const from = msg.from;
@@ -156,7 +149,7 @@ async function handleWebhook(body) {
               "❌ Tulis teks setelah .bratgif\n\nContoh: *.bratgif halo dunia*",
             );
           } else {
-            mediaQueue(async () => {
+            const p = mediaQueue(async () => {
               const stickerName = `brat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
               const outputPath = `media/output/${stickerName}.webp`;
               try {
@@ -165,7 +158,7 @@ async function handleWebhook(body) {
                 stats.stickers++;
                 saveStats();
                 logActivity("BRAT_GIF", from, { text: bratText });
-                setTimeout(() => cleanup(outputPath), 60000);
+                setTimeout(() => cleanup(outputPath), 120000);
               } catch (err) {
                 console.error("Brat GIF error:", err.message);
                 await sendText(
@@ -175,6 +168,7 @@ async function handleWebhook(body) {
                 logActivity("ERROR_BRAT_GIF", from, { error: err.message });
               }
             });
+            processingPromises.push(p);
           }
         } else if (text.startsWith(".brat ")) {
           // BRAT STATIC STICKER
@@ -185,7 +179,7 @@ async function handleWebhook(body) {
               "❌ Tulis teks setelah .brat\n\nContoh: *.brat halo dunia*",
             );
           } else {
-            mediaQueue(async () => {
+            const p = mediaQueue(async () => {
               const stickerName = `brat_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
               const outputPath = `media/output/${stickerName}.webp`;
               try {
@@ -194,7 +188,7 @@ async function handleWebhook(body) {
                 stats.stickers++;
                 saveStats();
                 logActivity("BRAT_STICKER", from, { text: bratText });
-                setTimeout(() => cleanup(outputPath), 60000);
+                setTimeout(() => cleanup(outputPath), 120000);
               } catch (err) {
                 console.error("Brat sticker error:", err.message);
                 await sendText(
@@ -204,6 +198,7 @@ async function handleWebhook(body) {
                 logActivity("ERROR_BRAT", from, { error: err.message });
               }
             });
+            processingPromises.push(p);
           }
         } else {
           // AI Agent responds to all other text messages
@@ -229,21 +224,25 @@ async function handleWebhook(body) {
 
       // IMAGE → STICKER (Static)
       if (msg.type === "image") {
-        mediaQueue(async () => {
+        const p = mediaQueue(async () => {
           const mediaId = msg.image.id;
           const inputPath = `media/input/${mediaId}`;
           const outputPath = `media/output/${mediaId}.webp`;
           const startTime = Date.now();
 
           try {
+            console.log(`[IMAGE] Downloading media ${mediaId}...`);
             await downloadMedia(mediaId, inputPath);
+
+            console.log(`[IMAGE] Converting to sticker...`);
             await convertToSticker(inputPath, outputPath);
 
-            // Antre pengiriman stiker agar tidak kena limit Meta #131056
+            console.log(`[IMAGE] Sending sticker...`);
             await rateLimitedSendSticker(from, mediaId, 0);
+            console.log(`[IMAGE] Sticker sent successfully!`);
 
             stats.stickers++;
-            saveStats(); // Persist immediately
+            saveStats();
 
             const processingTime = Date.now() - startTime;
             logActivity("STICKER_IMAGE", from, {
@@ -256,27 +255,33 @@ async function handleWebhook(body) {
             });
 
             cleanup(inputPath);
-            setTimeout(() => cleanup(outputPath), 60000);
+            setTimeout(() => cleanup(outputPath), 120000);
           } catch (err) {
             console.error(
-              "Image conversion error (details):",
+              `[IMAGE] Error for mediaId=${mediaId}:`,
               JSON.stringify(err.response?.data || err.message, null, 2),
             );
             logActivity("ERROR_IMAGE", from, {
               error: err.response?.data?.error?.message || err.message,
+              mediaId,
+              messageId: msg.id,
             });
             await sendText(
               from,
               "❌ Gagal mengkonversi gambar. Pastikan gambar tidak rusak!",
             ).catch(() => {});
+            // Clean up partial files
+            cleanup(inputPath);
+            cleanup(outputPath);
           }
         });
+        processingPromises.push(p);
       }
 
       // VIDEO → ANIMATED STICKER
       if (msg.type === "video") {
         console.log(`[VIDEO] Received video from ${from}, mediaId: ${msg.video.id}`);
-        mediaQueue(async () => {
+        const p = mediaQueue(async () => {
           const mediaId = msg.video.id;
           const inputPath = `media/input/${mediaId}.mp4`;
           const outputPath = `media/output/${mediaId}.webp`;
@@ -289,12 +294,11 @@ async function handleWebhook(body) {
             await convertVideoToSticker(inputPath, outputPath);
             console.log(`[VIDEO] Sending sticker...`);
 
-            // Antre pengiriman stiker agar tidak kena limit Meta #131056
             await rateLimitedSendSticker(from, mediaId, 500);
             console.log(`[VIDEO] Sticker sent successfully!`);
 
             stats.stickers++;
-            saveStats(); // Persist immediately
+            saveStats();
 
             const processingTime = Date.now() - startTime;
             logActivity("STICKER_VIDEO", from, {
@@ -303,7 +307,7 @@ async function handleWebhook(body) {
             });
 
             cleanup(inputPath);
-            setTimeout(() => cleanup(outputPath), 60000);
+            setTimeout(() => cleanup(outputPath), 120000);
           } catch (err) {
             console.error(
               "[VIDEO] Conversion/send error:",
@@ -316,19 +320,20 @@ async function handleWebhook(body) {
               from,
               `❌ Gagal mengkonversi video. Durasi boleh maksimal ${MAX_VIDEO_DURATION_SECONDS} detik, tapi output stiker animasi WhatsApp tetap harus di bawah 500KB. Coba video yang gerakannya lebih sedikit atau durasinya lebih pendek.`,
             ).catch(() => {});
+            cleanup(inputPath);
+            cleanup(outputPath);
           }
         });
+        processingPromises.push(p);
       }
 
       // DOCUMENT (image/video/gif) → STICKER
-      // Ketika user mengirim gambar sebagai dokumen (bukan lewat galeri/kamera),
-      // WhatsApp mengirimnya sebagai tipe "document" bukan "image".
       if (msg.type === "document") {
         const doc = msg.document;
         const mime = (doc.mime_type || "").toLowerCase();
         const filename = (doc.filename || "").toLowerCase();
 
-        // GIF → Animated Sticker (harus dicek duluan sebelum image)
+        // GIF → Animated Sticker
         const isGifDoc =
           mime === "image/gif" || filename.endsWith(".gif");
 
@@ -359,8 +364,7 @@ async function handleWebhook(body) {
           videoExtensions.some((ext) => filename.endsWith(ext));
 
         if (isGifDoc) {
-          // GIF diperlakukan sebagai animasi → convertVideoToSticker
-          mediaQueue(async () => {
+          const p = mediaQueue(async () => {
             const mediaId = doc.id;
             const inputPath = `media/input/${mediaId}.gif`;
             const outputPath = `media/output/${mediaId}.webp`;
@@ -384,7 +388,7 @@ async function handleWebhook(body) {
               });
 
               cleanup(inputPath);
-              setTimeout(() => cleanup(outputPath), 60000);
+              setTimeout(() => cleanup(outputPath), 120000);
             } catch (err) {
               console.error(
                 "Document GIF conversion error:",
@@ -398,10 +402,13 @@ async function handleWebhook(body) {
                 from,
                 "❌ Gagal mengkonversi GIF ke stiker animasi. Pastikan ukuran GIF tidak terlalu besar!",
               ).catch(() => {});
+              cleanup(inputPath);
+              cleanup(outputPath);
             }
           });
+          processingPromises.push(p);
         } else if (isImageDoc) {
-          mediaQueue(async () => {
+          const p = mediaQueue(async () => {
             const mediaId = doc.id;
             const ext = mime.includes("png")
               ? ".png"
@@ -430,7 +437,7 @@ async function handleWebhook(body) {
               });
 
               cleanup(inputPath);
-              setTimeout(() => cleanup(outputPath), 60000);
+              setTimeout(() => cleanup(outputPath), 120000);
             } catch (err) {
               console.error(
                 "Document image conversion error:",
@@ -444,10 +451,13 @@ async function handleWebhook(body) {
                 from,
                 "❌ Gagal mengkonversi dokumen gambar ke stiker. Pastikan file tidak rusak!",
               ).catch(() => {});
+              cleanup(inputPath);
+              cleanup(outputPath);
             }
           });
+          processingPromises.push(p);
         } else if (isVideoDoc) {
-          mediaQueue(async () => {
+          const p = mediaQueue(async () => {
             const mediaId = doc.id;
             const inputPath = `media/input/${mediaId}.mp4`;
             const outputPath = `media/output/${mediaId}.webp`;
@@ -471,7 +481,7 @@ async function handleWebhook(body) {
               });
 
               cleanup(inputPath);
-              setTimeout(() => cleanup(outputPath), 60000);
+              setTimeout(() => cleanup(outputPath), 120000);
             } catch (err) {
               console.error(
                 "Document video conversion error:",
@@ -485,14 +495,25 @@ async function handleWebhook(body) {
                 from,
                 `❌ Gagal mengkonversi dokumen video. Durasi boleh maksimal ${MAX_VIDEO_DURATION_SECONDS} detik, tapi output stiker animasi WhatsApp tetap harus di bawah 500KB.`,
               ).catch(() => {});
+              cleanup(inputPath);
+              cleanup(outputPath);
             }
           });
+          processingPromises.push(p);
         } else {
           console.log(
             `[SKIP] Document bukan gambar/video/gif: mime=${mime}, filename=${doc.filename}`,
           );
         }
       }
+    }
+
+    // Wait for ALL media processing in this webhook to finish.
+    // This ensures we don't lose track of any in-flight work.
+    if (processingPromises.length > 0) {
+      console.log(`[WEBHOOK] Waiting for ${processingPromises.length} media task(s) to complete...`);
+      await Promise.allSettled(processingPromises);
+      console.log(`[WEBHOOK] All ${processingPromises.length} media task(s) done.`);
     }
   } catch (err) {
     console.error("Webhook error:", err.response?.data || err.message);

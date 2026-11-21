@@ -46,9 +46,13 @@ app.get("/webhook", (req, res) => {
 });
 
 /* --- WEBHOOK RECEIVE --- */
-app.post("/webhook", async (req, res) => {
-  res.sendStatus(200); // Respond immediately to avoid timeout
-  await handleWebhook(req.body);
+app.post("/webhook", (req, res) => {
+  res.sendStatus(200); // Respond immediately to avoid Meta timeout
+
+  // Process in background — errors are caught inside handleWebhook
+  handleWebhook(req.body).catch((err) => {
+    console.error("[WEBHOOK] Unhandled error in background processing:", err.message);
+  });
 });
 
 module.exports = app;
